@@ -51,35 +51,67 @@ def clean_text(text):
 # Extract Important Sections
 # ==========================================
 
+SECTION_KEYWORDS = [
+    "skills",
+    "technical skills",
+    "experience",
+    "projects",
+    "education",
+    "certifications",
+    "summary",
+    "work history"
+]
+
+
 def extract_skills_and_experience(cv_text):
+    """
+    بيحاول يعزل أقسام الـ CV المهمة (Skills, Experience, Projects...)
+    بدل ما ياخد كل سطر قصير عشوائي (كان بيدخل نويز زي الاسم/التليفون).
 
-    lower = cv_text.lower()
+    المنطق: نلاقي أي سطر عنوان قسم (heading)، ونضم كل الأسطر اللي
+    جاية بعده لحد ما نوصل لعنوان قسم تاني أو سطر فاضي مزدوج.
+    """
 
-    keywords = [
-        "skills",
-        "technical skills",
-        "experience",
-        "projects",
-        "education",
-        "certifications",
-        "summary",
-        "work history"
-    ]
+    lines = cv_text.split("\n")
 
     important = []
+    inside_relevant_section = False
 
-    for line in cv_text.split("\n"):
+    for line in lines:
 
-        if any(k in line.lower() for k in keywords):
+        stripped = line.strip()
 
-            important.append(line)
+        if not stripped:
+            continue
 
-        elif len(line.strip()) < 60:
+        is_heading = (
+            len(stripped) < 40
+            and any(k in stripped.lower() for k in SECTION_KEYWORDS)
+        )
 
-            important.append(line)
+        if is_heading:
+            inside_relevant_section = True
+            important.append(stripped)
+            continue
+
+        # لو وصلنا لعنوان قسم تاني مش من الكلمات المفتاحية بتاعتنا،
+        # (سطر قصير غالبًا مش جزء من فقرة) نوقف الالتقاط لحد ما نلاقي
+        # قسم مهم جديد
+        looks_like_other_heading = (
+            len(stripped) < 40
+            and stripped.isupper()
+        )
+
+        if looks_like_other_heading and not is_heading:
+            inside_relevant_section = False
+            continue
+
+        if inside_relevant_section:
+            important.append(stripped)
 
     text = "\n".join(important)
 
+    # fallback: لو الاستخراج فشل ورجع نص قصير جدًا، استخدم النص الخام كامل
     if len(text) < 100:
         return cv_text
 
@@ -100,13 +132,9 @@ def process_cv(uploaded_file):
     cleaned_focused = clean_text(focused_text)
 
     return {
-
         "raw_text": raw_text,
-
         "cleaned_text": cleaned_text,
-
         "focused_text": cleaned_focused
-
     }
 
 # ==========================================
@@ -114,7 +142,6 @@ def process_cv(uploaded_file):
 # ==========================================
 
 def generate_embedding(text):
-
     return embedding_model.encode(text)
 
 # ==========================================
@@ -140,11 +167,9 @@ def calculate_cosine_similarity(vec1, vec2):
 def get_match_score(cv_text, job_description):
 
     cv_clean = clean_text(cv_text)
-
     jd_clean = clean_text(job_description)
 
     cv_embedding = generate_embedding(cv_clean)
-
     jd_embedding = generate_embedding(jd_clean)
 
     similarity = calculate_cosine_similarity(
@@ -153,7 +178,6 @@ def get_match_score(cv_text, job_description):
     )
 
     score = similarity * 100
-
     score = max(0, min(100, score))
 
     return round(score, 2)
@@ -162,31 +186,20 @@ def get_match_score(cv_text, job_description):
 # Integration Function
 # ==========================================
 
-def run_first_and_second_party_tasks(
-        pdf_file,
-        job_description
-):
+def run_first_and_second_party_tasks(pdf_file, job_description):
 
     cv = process_cv(pdf_file)
 
     match_score = get_match_score(
-
         cv["focused_text"],
-
         job_description
-
     )
 
     return {
-
         "raw_text": cv["raw_text"],
-
         "cleaned_text": cv["cleaned_text"],
-
         "focused_text": cv["focused_text"],
-
         "match_score": match_score
-
     }
 
 # ==========================================
@@ -218,17 +231,11 @@ if __name__ == "__main__":
     """
 
     result = run_first_and_second_party_tasks(
-
         pdf_path,
-
         job_description
-
     )
 
     print("=" * 50)
-
     print("Match Score:", result["match_score"])
-
     print("=" * 50)
-
     print(result["focused_text"][:1000])
