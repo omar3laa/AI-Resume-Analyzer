@@ -1,19 +1,31 @@
+"""
+llm_service.py
+===============
+مكان واحد لكل منطق الـ LLM (بناء الـ Prompt + نداء Gemini + تنضيف الرد).
+دي الحاجة الوحيدة اللي backend.py و llm.py المفروض يستوردوا منها،
+عشان لو عدّلنا الـ Prompt أو منطق الـ parsing نعدله مرة واحدة بس.
+"""
+
 import os
+import re
 import json
+
 from dotenv import load_dotenv
 from google import genai
-
-from task1_task2 import run_first_and_second_party_tasks
-
-# ==========================================
-# Load API Key
-# ==========================================
 
 load_dotenv()
 
 API_KEY = os.getenv("GEMINI_API_KEY")
 
+if not API_KEY:
+    raise RuntimeError(
+        "Please create a .env file and add GEMINI_API_KEY"
+    )
+
 client = genai.Client(api_key=API_KEY)
+
+MODEL_NAME = "gemini-2.5-flash"
+
 
 # ==========================================
 # Prompt Builder
@@ -46,7 +58,8 @@ Job Description
 
 ==================================================
 
-Return ONLY valid JSON.
+Return ONLY valid JSON. Do not include any text, explanation, or
+markdown before or after the JSON object.
 
 JSON Format
 
@@ -73,86 +86,78 @@ Not Recommended
 
     return prompt
 
+
 # ==========================================
-# Gemini Analysis
+# Robust JSON Extraction
 # ==========================================
 
-def analyze_resume(pdf_file, job_description):
+def _extract_json(raw_text):
+    """
+    بيحاول ياخد أي نص JSON من رد الموديل حتى لو حط كلام زيادة
+    قبل أو بعد الـ JSON، أو لف الرد بـ ```json ... ``` fences.
+    """
 
-    result = run_first_and_second_party_tasks(
-        pdf_file,
-        job_description
-    )
+    text = raw_text.strip()
 
-    cv_text = result["focused_text"]
+    # شيل markdown code fences لو موجودة
+    if text.startswith("```json"):
+        text = text[len("```json"):].strip()
+        if text.endswith("```"):
+            text = text[:-3].strip()
 
-    match_score = result["match_score"]
+    elif text.startswith("```"):
+        text = text[3:].strip()
+        if text.endswith("```"):
+            text = text[:-3].strip()
 
-    prompt = build_prompt(
-        cv_text,
-        job_description,
-        match_score
-    )
+    # لو لسه فيه كلام زيادة حوالين الـ JSON، دور على أول { وآخر }
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+
+    if match:
+        try:
+            return json.loads(match.group(0))
+        except json.JSONDecodeError:
+            pass
+
+    raise ValueError("Gemini returned invalid JSON")
+
+
+# ==========================================
+# Gemini Call
+# ==========================================
+
+def analyze_cv_with_llm(cv_text, job_description, match_score):
+
+    prompt = build_prompt(cv_text, job_description, match_score)
 
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=MODEL_NAME,
         contents=prompt
     )
 
-    text = response.text.strip()
+    text = response.text or ""
 
-    if text.startswith("```json"):
-        text = text.replace("```json", "").replace("```", "").strip()
+    result = _extract_json(text)
 
-    elif text.startswith("```"):
-        text = text.replace("```", "").strip()
+    # تأكيد إن كل المفاتيح المطلوبة موجودة حتى لو الموديل نسي واحد
+    defaults = {
+        "summary": "",
+        "match_summary": "",
+        "strengths": [],
+        "weaknesses": [],
+        "missing_skills": [],
+        "tips": [],
+        "hiring_recommendation": ""
+    }
 
-    ai_result = json.loads(text)
+    for key, default_value in defaults.items():
+        result.setdefault(key, default_value)
 
-    ai_result["match_score"] = match_score
+    result["match_score"] = match_score
 
-    ai_result["cleaned_text"] = result["cleaned_text"]
-
-    ai_result["focused_text"] = result["focused_text"]
-
-    return ai_result
-
-
-# ==========================================
-# Test
-# ==========================================
-
-if __name__ == "__main__":
-
-    pdf = "test.pdf"
-
-    job = """
-Machine Learning Engineer
-
-Requirements
-
-Python
-
-TensorFlow
-
-SQL
-
-AWS
-
-Docker
-
-Git
-
-Flask
-"""
-
-    analysis = analyze_resume(
-        pdf,
-        job
-    )
-
-    print(json.dumps(
-        analysis,
-        indent=4,
-        ensure_ascii=False
-    ))
+    return result
