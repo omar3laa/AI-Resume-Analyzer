@@ -24,7 +24,10 @@ if not API_KEY:
 
 client = genai.Client(api_key=API_KEY)
 
-MODEL_NAME = "gemini-2.5-flash"
+# نستخدم alias "gemini-flash-latest" بدل اسم إصدار مثبت (زي gemini-2.5-flash)
+# عشان يتأشر تلقائيًا على أحدث موديل Flash مستقر متاح من جوجل،
+# وميتوقفش الكود لما جوجل توقف إصدار قديم عن العمل.
+MODEL_NAME = "gemini-flash-latest"
 
 
 # ==========================================
