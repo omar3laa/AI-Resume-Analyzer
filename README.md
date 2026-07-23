@@ -4,15 +4,6 @@ An intelligent, AI-powered system designed to analyze resumes against specific j
 
 ---
 
-## 📸 Demo
-
-> Add screenshots or a GIF of your application here.
-
-| Upload Resume | Analysis Results |
-|---------------|------------------|
-| ![Upload](assets/upload.png) | ![Results](assets/results.png) |
-
----
 
 ## ✨ Key Features
 
