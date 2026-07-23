@@ -1,15 +1,59 @@
 import re
+import os
 import fitz
 import numpy as np
-from sentence_transformers import SentenceTransformer
+from datasets import load_dataset
+from sentence_transformers import SentenceTransformer, InputExample, losses
+from torch.utils.data import DataLoader
+
+# ==========================================
+# Train Model (Only if not already trained)
+# ==========================================
+
+MODEL_PATH = "./finetuned_model"
+
+if not os.path.exists(MODEL_PATH):
+
+    print("⏳ جاري تدريب الموديل على البيانات (Fine-Tuning)...")
+
+    # 1. تحميل الموديل الأصلي والداتا سيت
+    model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+    ds = load_dataset("AzharAli05/Resume-Screening-Dataset", split="train")
+
+    # 2. تجهيز داتا التدريب (تحويل select لـ 1.0 و reject لـ 0.0)
+    train_examples = []
+    for row in ds:
+        # إعطاء قيم مستهدفة (1 للقبول و 0 للرفض)
+        label = 1.0 if row["Decision"] == "select" else 0.0
+        train_examples.append(
+            InputExample(
+                texts=[row["Resume"], row["Job_Description"]], label=label
+            )
+        )
+
+    # 3. إعداد الـ DataLoader والـ Loss Function
+    train_dataloader = DataLoader(train_examples, shuffle=True, batch_size=16)
+    train_loss = losses.CosineSimilarityLoss(model)
+
+    # 4. بدء التدريب (2 Epochs، الوقت بيعتمد على حجم الداتا والـ CPU/GPU)
+    model.fit(
+        train_objectives=[(train_dataloader, train_loss)],
+        epochs=2,
+        warmup_steps=10,
+    )
+
+    # 5. حفظ الموديل بعد التدريب عشان مانكررش التدريب في المرات الجاية
+    model.save(MODEL_PATH)
+    print("✅ تم التدريب بنجاح!")
+
+else:
+    print("ℹ️ الموديل المدرب موجود بالفعل، هيتم تخطي التدريب.")
 
 # ==========================================
 # Load Embedding Model (Load Once)
 # ==========================================
 
-embedding_model = SentenceTransformer(
-    "./finetuned_model"
-)
+embedding_model = SentenceTransformer(MODEL_PATH)
 
 # ==========================================
 # PDF Extraction
@@ -150,13 +194,12 @@ def generate_embedding(text):
 
 def calculate_cosine_similarity(vec1, vec2):
 
-    similarity = np.dot(vec1, vec2)
+    norm_product = np.linalg.norm(vec1) * np.linalg.norm(vec2)
 
-    similarity /= (
-        np.linalg.norm(vec1)
-        *
-        np.linalg.norm(vec2)
-    )
+    if norm_product == 0:
+        return 0.0
+
+    similarity = np.dot(vec1, vec2) / norm_product
 
     return float(similarity)
 
