@@ -1,247 +1,176 @@
-import streamlit as st
-import requests
+"""
+Career Radar - Backend API
+==========================
+
+Responsible for:
+
+1. Receive PDF + Job Description
+2. Call Task 1 (PDF Processing)
+3. Call Task 2 (Similarity)
+4. Call Gemini
+5. Return JSON
+"""
+
+import traceback
+
+from flask import Flask, request, jsonify
+from flask_cors import CORS
+
+# ==============================
+# Person 1 + Person 2
+# ==============================
+
+from task1_task2 import run_first_and_second_party_tasks
+
+# ==============================
+# Person 3 (shared LLM logic)
+# ==============================
+
+from llm_service import analyze_cv_with_llm
+
+# ==============================
+# Flask App
+# ==============================
+
+app = Flask(__name__)
+
+CORS(app)
+
+# حد أقصى 10MB لأي ملف مرفوع، عشان محدش يرفع PDF ضخم يعلّق السيرفر
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
+
 
 # ==========================================
-# Page Config
+# Analyze Endpoint
 # ==========================================
 
-st.set_page_config(
-    page_title="Career Radar",
-    page_icon="📄",
-    layout="wide"
-)
+@app.route("/analyze", methods=["POST"])
+def analyze():
 
-st.title("🎯 Career Radar")
-st.markdown("### AI Resume Analyzer")
+    try:
 
-st.divider()
+        # ----------------------------
+        # Validate Request
+        # ----------------------------
 
-BACKEND_URL = "http://127.0.0.1:5001/analyze"
+        if "file" not in request.files:
+            return jsonify({
+                "error": "No PDF file uploaded."
+            }), 400
 
-# ==========================================
-# Session State (عشان النتيجة تفضل ظاهرة بعد أي rerun)
-# ==========================================
+        pdf_file = request.files["file"]
 
-if "result" not in st.session_state:
-    st.session_state.result = None
+        job_description = request.form.get(
+            "job_description",
+            ""
+        ).strip()
 
-# ==========================================
-# Upload PDF
-# ==========================================
+        if pdf_file.filename == "":
+            return jsonify({
+                "error": "Please upload a PDF."
+            }), 400
 
-uploaded_file = st.file_uploader(
-    "Upload Your Resume (PDF)",
-    type=["pdf"]
-)
+        if not pdf_file.filename.lower().endswith(".pdf"):
+            return jsonify({
+                "error": "Only PDF files are supported."
+            }), 400
 
-job_description = st.text_area(
-    "Paste Job Description",
-    height=250,
-    placeholder="Paste the Job Description here..."
-)
+        if job_description == "":
+            return jsonify({
+                "error": "Job Description is required."
+            }), 400
 
-analyze = st.button(
-    "Analyze Resume",
-    type="primary",
-    use_container_width=True
-)
+        # ==========================================
+        # Person 1 + Person 2
+        # ==========================================
 
-# ==========================================
-# Call Backend
-# ==========================================
+        result = run_first_and_second_party_tasks(
+            pdf_file,
+            job_description
+        )
 
-if analyze:
+        cv_text = result["focused_text"]
+        cleaned_text = result["cleaned_text"]
+        match_score = result["match_score"]
 
-    if uploaded_file is None:
-        st.error("Please upload your resume.")
-        st.stop()
+        # ==========================================
+        # Person 3 (Gemini)
+        # ==========================================
 
-    if job_description.strip() == "":
-        st.error("Please enter Job Description.")
-        st.stop()
+        llm_result = analyze_cv_with_llm(
+            cv_text,
+            job_description,
+            match_score
+        )
 
-    with st.spinner("Analyzing Resume..."):
+        # ==========================================
+        # Final JSON
+        # ==========================================
 
-        files = {
-            "file": (
-                uploaded_file.name,
-                uploaded_file,
-                "application/pdf"
-            )
+        response = {
+            "success": True,
+            "match_score": match_score,
+            "summary": llm_result.get("summary", ""),
+            "match_summary": llm_result.get("match_summary", ""),
+            "strengths": llm_result.get("strengths", []),
+            "weaknesses": llm_result.get("weaknesses", []),
+            "missing_skills": llm_result.get("missing_skills", []),
+            "tips": llm_result.get("tips", []),
+            "hiring_recommendation": llm_result.get("hiring_recommendation", ""),
+            "cleaned_text": cleaned_text,
+            "focused_text": cv_text
         }
 
-        data = {
-            "job_description": job_description
-        }
+        return jsonify(response), 200
 
-        try:
-            response = requests.post(
-                BACKEND_URL,
-                files=files,
-                data=data,
-                timeout=60  # عشان الواجهة متعلقش لو الباك إند أو Gemini بطيئين
-            )
-            result = response.json()
+    except ValueError as e:
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 400
 
-        except requests.exceptions.Timeout:
-            st.error("Backend took too long to respond. Please try again.")
-            st.stop()
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 500
 
-        except requests.exceptions.ConnectionError:
-            st.error("Cannot connect to Backend. Make sure it's running on port 5001.")
-            st.stop()
-
-        except Exception:
-            st.error("Unexpected error while contacting the backend.")
-            st.stop()
-
-        if not response.ok:
-            st.error(
-                result.get(
-                    "error",
-                    "Unknown Error"
-                )
-            )
-            st.stop()
-
-        # نخزن النتيجة في session_state عشان تفضل ظاهرة
-        # حتى بعد إعادة تشغيل السكريبت (rerun) بتاعة Streamlit
-        st.session_state.result = result
 
 # ==========================================
-# Display Results (بيتنفذ بس لو فيه نتيجة محفوظة)
+# Health Check
 # ==========================================
 
-if st.session_state.result is not None:
+@app.route("/health", methods=["GET"])
+def health():
+    return jsonify({
+        "status": "running",
+        "service": "Career Radar Backend"
+    })
 
-    result = st.session_state.result
 
-    st.divider()
+# ==========================================
+# Home
+# ==========================================
 
-    st.subheader("📊 Analysis Result")
+@app.route("/", methods=["GET"])
+def home():
+    return jsonify({
+        "project": "Career Radar",
+        "backend": "Flask API",
+        "status": "Ready"
+    })
 
-    score = result.get("match_score", 0)
 
-    st.progress(min(int(score), 100))
+# ==========================================
+# Run Server
+# ==========================================
 
-    st.metric(
-        label="Match Score",
-        value=f"{score}%"
+if __name__ == "__main__":
+    # debug=False عشان نمنع الـ auto-reloader من تحميل موديل
+    # SentenceTransformer مرتين وقت الـ startup
+    app.run(
+        host="127.0.0.1",
+        port=5001,
+        debug=False
     )
-
-    st.divider()
-
-    # ==========================================
-    # Summary
-    # ==========================================
-
-    st.subheader("📄 Professional Summary")
-
-    st.info(
-        result.get(
-            "summary",
-            "No summary available."
-        )
-    )
-
-    # ==========================================
-    # Match Summary
-    # ==========================================
-
-    st.subheader("📈 Match Analysis")
-
-    st.write(
-        result.get(
-            "match_summary",
-            "No analysis available."
-        )
-    )
-
-    st.divider()
-
-    col1, col2 = st.columns(2)
-
-    # ==========================================
-    # Strengths
-    # ==========================================
-
-    with col1:
-
-        st.subheader("✅ Strengths")
-
-        strengths = result.get("strengths", [])
-
-        if strengths:
-            for item in strengths:
-                st.success(item)
-        else:
-            st.write("No strengths found.")
-
-    # ==========================================
-    # Weaknesses
-    # ==========================================
-
-    with col2:
-
-        st.subheader("⚠️ Weaknesses")
-
-        weaknesses = result.get("weaknesses", [])
-
-        if weaknesses:
-            for item in weaknesses:
-                st.warning(item)
-        else:
-            st.write("No weaknesses found.")
-
-    st.divider()
-
-    # ==========================================
-    # Missing Skills
-    # ==========================================
-
-    st.subheader("❌ Missing Skills")
-
-    missing = result.get("missing_skills", [])
-
-    if missing:
-        for skill in missing:
-            st.error(skill)
-    else:
-        st.success("No missing skills detected.")
-
-    st.divider()
-
-    # ==========================================
-    # Improvement Tips
-    # ==========================================
-
-    st.subheader("💡 Improvement Tips")
-
-    tips = result.get("tips", [])
-
-    if tips:
-        for i, tip in enumerate(tips, start=1):
-            st.write(f"**{i}.** {tip}")
-    else:
-        st.write("No tips available.")
-
-    st.divider()
-
-    # ==========================================
-    # Hiring Recommendation
-    # ==========================================
-
-    recommendation = result.get("hiring_recommendation", "")
-
-    if recommendation == "Strong Match":
-        st.success(f"🎉 {recommendation}")
-    elif recommendation == "Good Match":
-        st.info(f"👍 {recommendation}")
-    elif recommendation == "Needs Improvement":
-        st.warning(f"⚡ {recommendation}")
-    elif recommendation:
-        st.error(f"❌ {recommendation}")
-
-    st.divider()
-
-    st.caption("Career Radar • AI Resume Analyzer")
